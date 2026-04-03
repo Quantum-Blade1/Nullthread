@@ -69,10 +69,24 @@ That's it. No GPU, no profiler, no configuration needed to get started
 pip install nullthread
 
 # from source
-git clone https://github.com/yourusername/nullthread.git
-cd nullthread
-pip install -e .
+git clone https://github.com/Quantum-Blade1/Nullthread.git
+cd Nullthread
+pip install -e ".[dev]"
+pytest -q
 ```
+
+### CLI reference (v2)
+
+```bash
+nullthread analyze kernel.ptx
+nullthread analyze kernel.ptx --passes race,barrier,coalescing,occupancy,divergence
+nullthread analyze kernel.ptx --format json
+nullthread analyze kernel.ptx --format html --output report.html
+nullthread analyze kernel.ptx --no-ai
+nullthread version
+```
+
+See [docs/architecture.md](docs/architecture.md) for the analysis pipeline.
 
 ### AI diagnosis layer (optional)
 

@@ -61,10 +61,12 @@ nullthread/
 │   ├── cfg/          # thread-annotated control flow graph
 │   ├── passes/       # the five analysis passes
 │   ├── ai/           # AI diagnosis layer (pluggable backends)
-│   └── report/       # CLI, HTML, JSON output
+│   ├── report/       # CLI, HTML, JSON output
+│   ├── analyze.py    # pipeline orchestration
+│   └── cli.py        # Typer CLI
 ├── tests/
-│   ├── kernels/      # annotated CUDA/PTX test kernels
-│   └── unit/         # unit tests for individual components
+│   ├── kernels/      # annotated `.ptx` fixtures (see matmul.ptx)
+│   └── test_*.py     # pytest suite
 └── docs/             # architecture docs and guides
 ```
 
@@ -72,12 +74,12 @@ nullthread/
 
 ## Adding a test kernel
 
-Test kernels live in `tests/kernels/`. Each kernel needs three files:
+Test kernels live in `tests/kernels/` as **PTX** files (compile with `nvcc -ptx` from CUDA source, or hand-crafted minimal PTX for the analyzer). Example:
 
 ```
 tests/kernels/your_kernel/
-├── kernel.cu          # CUDA source
-├── kernel.ptx         # compiled PTX
+├── kernel.cu          # CUDA source (optional, for documentation)
+├── kernel.ptx         # compiled PTX (what Nullthread analyzes)
 └── expected.json      # expected findings from nullthread
 ```
 
@@ -132,7 +134,7 @@ Use the bug report issue template. The most useful thing you can include is the 
 - `ruff` for linting (config in `pyproject.toml`)
 - Type hints on all public functions
 - Docstrings on all public classes and functions
-- No line longer than 100 characters
+- Prefer wrapping long lines (ruff `E501` is not enforced by default)
 
 ---
 
