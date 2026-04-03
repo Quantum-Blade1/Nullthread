@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Nullthread report</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 960px; }
+    h1 { font-size: 1.25rem; }
+    .meta { color: #444; margin-bottom: 1.5rem; }
+    .finding { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .critical { border-left: 4px solid #c00; }
+    .warning { border-left: 4px solid #c90; }
+    .info { border-left: 4px solid #08c; }
+    pre { white-space: pre-wrap; background: #f6f6f6; padding: 0.75rem; border-radius: 6px; }
+    .tag { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Nullthread analysis</h1>
+  <div class="meta">
+    <div><strong>PTX:</strong> {{ result.ptx_path }}</div>
+    <div><strong>Kernels:</strong> {{ result.kernel_names | join(', ') or '(none)' }}</div>
+  </div>
+  {% if result.unsupported_notes %}
+  <h2>Notes</h2>
+  <ul>
+    {% for n in result.unsupported_notes %}<li>{{ n }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  <h2>Findings</h2>
+  {% if not result.findings %}
+  <p>No issues reported by selected passes.</p>
+  {% endif %}
+  {% for d in result.findings %}
+  {% set f = d.finding %}
+  <div class="finding {{ f.severity.value }}">
+    <div class="tag">{{ f.severity.value | upper }} — {{ f.kind.value }} — {{ f.kernel_name }}:{{ f.line }}</div>
+    <p>{{ f.message }}</p>
+    <pre>{{ f.evidence }}</pre>
+    <p><strong>Explanation:</strong> {{ d.explanation }}</p>
+    <p><strong>Consequence:</strong> {{ d.consequence }}</p>
+    <p><strong>Fix:</strong> {{ d.fix_suggestion }}</p>
+    <p><small>Diagnosis source: {{ d.source }}</small></p>
+  </div>
+  {% endfor %}
+</body>
+</html>
