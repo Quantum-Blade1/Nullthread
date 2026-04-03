@@ -1,212 +1,199 @@
-# nullthread
+## nullthread
 
-**Static analysis for GPU kernels — catch correctness bugs and performance issues before you ever touch a GPU**
+**Static analysis for GPU kernels — correctness + performance without touching a GPU.**
+
+Nullthread reads your **compiled PTX** and tells you, in seconds:
+
+- **Is my kernel *correct*?** (data races, unsafe barriers)
+- **Is it leaving performance on the table?** (uncoalesced memory, low occupancy, warp divergence)
+
+No GPU hardware, no profiler, no CUDA runtime needed – everything is done on the IR.
 
 ---
 
-```
+### Why this exists
+
+GPU kernels fail in ways that are hard to see:
+
+- A shared-memory race usually **does not crash** your kernel – it silently corrupts numbers.
+- A bad memory access pattern can burn **80% of your bandwidth** with no obvious sign.
+
+Nullthread moves that feedback to **“compile time”**:
+
+- You compile to PTX.
+- Nullthread builds a thread-aware control flow graph.
+- Five analysis passes run over that graph and emit findings with explanations.
+
+You get a report like:
+
+```text
 nullthread analyze matmul.ptx
 
-[CRITICAL] Race Condition at matmul_kernel:42
-  Thread group writing to smem[threadIdx.x] with no barrier
-  before read at line 51 — consequence: non-deterministic output
-  Fix: insert __syncthreads() after the tile load at line 42
+[CRITICAL] RACE_CONDITION at matmul_kernel:42
+  Shared memory write may be read by another thread with no barrier in between.
 
-[WARNING] Uncoalesced Memory Access at matmul_kernel:31
-  Column-major global access across warp — 32 transactions where 1 is sufficient
-  Estimated bandwidth waste: 96%
-  Fix: transpose access pattern or use shared memory staging
+[WARNING] UNCOALESCED_ACCESS at matmul_kernel:31
+  Global load uses thread-dependent addressing - verify warp coalescing.
 ```
 
 ---
 
-## What this is
+### Install
 
-GPU kernels fail in ways that are invisible at runtime. A race condition on shared memory doesn't crash your kernel — it silently returns wrong numbers. An uncoalesced memory access doesn't throw an error — it just wastes 96% of your bandwidth. Neither shows up until you're already burning GPU hours
-
-Nullthread reads your compiled PTX file and tells you about both of those things before you run anything. No GPU hardware required. No profiler to attach. One command, under 15 seconds
-
-It runs five analysis passes over your kernel's intermediate representation:
-
-- **Race condition detection** — shared memory writes without sync barriers
-- **Sync barrier validation** — `__syncthreads()` inside divergent control flow
-- **Memory coalescing analysis** — uncoalesced global memory access patterns
-- **Occupancy estimation** — register and shared memory pressure limiting active warps
-- **Warp divergence flagging** — branch conditions that serialize parallel threads
-
-Each finding comes with a plain-English explanation, a description of what actually happens at runtime if the bug triggers, and a concrete fix suggestion specific to your kernel
-
----
-
-## Quickstart
+**Requirements:** Python 3.10+, no GPU needed.
 
 ```bash
-pip install nullthread
-```
-
-Compile your CUDA kernel to PTX:
-
-```bash
-nvcc -ptx your_kernel.cu -o your_kernel.ptx
-```
-
-Run the analysis:
-
-```bash
-nullthread analyze your_kernel.ptx
-```
-
-That's it. No GPU, no profiler, no configuration needed to get started
-
----
-
-## Installation
-
-**Requirements:** Python 3.10+, no GPU needed
-
-```bash
-# from PyPI (once published)
-pip install nullthread
-
-# from source
+# from source (recommended for now)
 git clone https://github.com/Quantum-Blade1/Nullthread.git
 cd Nullthread
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 pytest -q
 ```
 
-### CLI reference (v2)
+---
+
+### Basic workflow
+
+1. Compile your CUDA kernel to PTX:
+
+   ```bash
+   nvcc -ptx kernel.cu -o kernel.ptx
+   ```
+
+2. Run Nullthread:
+
+   ```bash
+   nullthread analyze kernel.ptx
+   ```
+
+3. Iterate on your kernel using the findings (correctness issues first, then performance).
+
+---
+
+### CLI overview
 
 ```bash
+# default: all passes, human-readable text to stdout
 nullthread analyze kernel.ptx
-nullthread analyze kernel.ptx --passes race,barrier,coalescing,occupancy,divergence
-nullthread analyze kernel.ptx --format json
+
+# choose specific passes
+nullthread analyze kernel.ptx --passes race,barrier,coalescing
+
+# JSON (for CI or tools)
+nullthread analyze kernel.ptx --format json > report.json
+
+# HTML report (open in browser)
 nullthread analyze kernel.ptx --format html --output report.html
+
+# disable LLM usage (templates only)
 nullthread analyze kernel.ptx --no-ai
+
+# show version
 nullthread version
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the analysis pipeline.
+Pass names:
 
-### AI diagnosis layer (optional)
+- `race` – shared-memory race detection
+- `barrier` – divergent / unsafe `__syncthreads` patterns
+- `coalescing` – global memory coalescing hints
+- `occupancy` – register/shared-memory pressure estimates
+- `divergence` – warp divergence hints
 
-By default nullthread uses built-in templates to explain findings. For richer, kernel-specific explanations you can point it at a language model:
+---
+
+### AI diagnosis (optional)
+
+The **analysis passes are deterministic** – they decide *what* is a finding.  
+An optional AI layer only explains *why it matters* and *how to fix it*.
+
+Configure via environment:
 
 ```bash
-# Anthropic Claude
+# Anthropic Claude (recommended when using cloud LLM)
 export NULLTHREAD_API_KEY=your-anthropic-key
 export NULLTHREAD_MODEL=claude-sonnet-4-20250514
 
-# or use a local model via Ollama (no API key needed)
+# or use a local backend via Ollama (planned)
 export NULLTHREAD_BACKEND=ollama
 export NULLTHREAD_MODEL=llama3
 ```
 
+If no model is configured, Nullthread falls back to **static templates** – you always get a report.
+
 ---
 
-## Usage
+### Architecture at a glance
 
-```bash
-# analyze a single kernel
-nullthread analyze kernel.ptx
+Under the hood, the pipeline is five clearly separated stages:
 
-# run specific passes only
-nullthread analyze kernel.ptx --passes race,coalescing
-
-# output as JSON (useful for CI/CD)
-nullthread analyze kernel.ptx --format json
-
-# output as HTML report
-nullthread analyze kernel.ptx --format html --output report.html
-
-# disable AI diagnosis (uses static templates, faster)
-nullthread analyze kernel.ptx --no-ai
+```mermaid
+flowchart LR
+  ptx[PTX_file] --> parse[Parser]
+  parse --> cfg[CFG_builder]
+  cfg --> passes[Analysis_passes]
+  passes --> ai[AI_or_templates]
+  ai --> report[Report_renderer]
+  report --> out[CLI_JSON_HTML]
 ```
 
----
+- **Parser** (`src/nullthread/parser/`)  
+  Reads `.version`, `.target`, `.entry`, `.loc`, and instructions into a normalized PTX IR.
 
-## How it works
+- **CFG builder** (`src/nullthread/cfg/`)  
+  Builds a basic-block control flow graph with hints about `threadIdx`, `blockIdx`, etc.
 
-1. You compile your CUDA kernel to PTX using the standard NVIDIA toolchain
-2. Nullthread parses the PTX and builds a thread-annotated control flow graph — a graph where every node knows which thread is executing it and what the thread index arithmetic looks like
-3. Five analysis passes run in parallel over that graph
-4. Each finding goes to the AI layer (or static templates) to generate a plain-English explanation with a fix
-5. The report prints to stdout (or HTML or JSON depending on your flags)
+- **Passes** (`src/nullthread/passes/`)  
+  Five independent passes operating on the CFG + PTX:
+  - Race condition detector  
+  - Sync barrier validator  
+  - Memory coalescing analyzer  
+  - Occupancy estimator  
+  - Warp divergence flagger  
 
-The key thing that makes this different from general-purpose static analyzers is that Nullthread's CFG models GPU thread semantics explicitly — warp structure, thread index arithmetic, shared memory bank layout. Most analyzers have no concept of `threadIdx`. Without that model, you can't reason about which threads conflict
+- **Diagnosis** (`src/nullthread/ai/`)  
+  Converts low-level findings into explanations (either via templates or an LLM).
 
----
+- **Report** (`src/nullthread/report/`)  
+  Renders CLI text, JSON (for tools/CI), or HTML reports.
 
-## Current accuracy
-
-| Pass | Kernels tested | Detection rate | False positive rate |
-|------|---------------|----------------|---------------------|
-| Race Condition Detector | 20 | 85% | 10% |
-| Sync Barrier Validator | 15 | 93% | 7% |
-| Memory Coalescing Analyzer | 20 | 95% | 0% |
-| Occupancy Estimator | 12 | 100% | 0% |
-| Warp Divergence Flagger | 10 | 80% | 20% |
-
-The race detector's false positive rate is the main known weakness — it's inherent to conservative symbolic reasoning about thread index ranges. The roadmap includes optional user annotations to reduce this for teams who want to invest in it
+See `docs/architecture.md` if you want to work on the internals.
 
 ---
 
-## What's not supported yet
+### Current limitations
 
-- Cooperative groups
-- Warp-level primitives (`shfl_xor_sync`, `__reduce_add_sync`, etc.)
-- Dynamic parallelism
-- AMD ROCm / HIP kernels (planned — see roadmap)
+Nullthread v2 is designed to be **useful but honest** about what it cannot yet do:
 
-When Nullthread encounters these it explicitly says so in the report rather than silently skipping them
+- Cooperative groups, warp shuffles, and dynamic parallelism are not fully supported.
+- Race detection is conservative and may produce false positives on complex patterns.
+- Only NVIDIA PTX is supported for now (HIP/ROCm is on the roadmap).
 
----
-
-## Roadmap
-
-**Next (1 month)**
-- Complete warp divergence pass
-- HTML report with source-annotated kernel view
-- VS Code extension for inline warnings
-
-**3–6 months**
-- AMD ROCm and HIP kernel support
-- PyTorch custom op build pipeline integration
-- Accuracy benchmarks against FlashAttention and Triton kernels
-- Ollama integration for fully local inference
-
-**Later**
-- Fine-tuned local model — eliminates any API dependency
-- GitHub Action for automatic kernel analysis on PRs
-- CI/CD integration guide
+When the tool hits something out-of-scope, it will **tell you explicitly** in the report.
 
 ---
 
-## Contributing
+### Contributing
 
-Contributions are welcome — especially if you write GPU kernels professionally and have hit the kinds of bugs Nullthread is designed to catch. Your real-world test cases are more valuable than synthetic ones
+This is an open-source project meant to be built with the community. Good entry points:
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to get started
+- Improve PTX coverage in `src/nullthread/parser/`.
+- Tighten or extend passes in `src/nullthread/passes/`.
+- Add real-world PTX fixtures under `tests/kernels/`.
+- Help refine the JSON/HTML reports and CLI ergonomics.
 
-The areas where help is most needed right now:
-- Extending the PTX parser to cover cooperative groups and warp-level primitives
-- HIP/ROCm backend
-- VS Code extension
-- Real-world kernel test cases for the accuracy suite
+See `CONTRIBUTING.md` for:
 
----
-
-## Research background
-
-Nullthread builds on a line of academic work in GPU static analysis:
-
-- [GPUVerify (CAV 2014)](https://doi.org/10.1007/978-3-319-08867-9_5) — foundational two-thread abstraction for GPU race checking
-- [RaCUDA (PMAM 2024)](https://dl.acm.org/doi/10.1145/3637314) — quantitative performance modeling for CUDA kernels
-- [HiRace (SC 2024)](https://sc24.supercomputing.org/) — high-accuracy data race detection on real kernel corpora
-- [OOPSLA 2024 race analysis paper](https://dl.acm.org/doi/10.1145/3689734) — theoretical grounding for conservative static race analysis
+- Dev setup
+- How to add a new pass
+- How to add a test kernel
+- Coding style and CI
 
 ---
 
-## License
+### License
 
-Apache 2.0 — see [LICENSE](LICENSE)
+Apache 2.0 – see `LICENSE`.
+
