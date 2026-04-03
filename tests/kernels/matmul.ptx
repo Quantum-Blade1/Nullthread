@@ -1,0 +1,40 @@
+.version 7.0
+.target sm_75
+
+.visible .entry matmul_kernel(
+  .param .u64 A,
+  .param .u64 B
+)
+{
+  .reg .f32 %f<200>;
+  .reg .pred %p<4>;
+  .reg .u32 %r<32>;
+  .shared .align 4 .b32 smem[4096];
+
+  .loc 1 10 0
+  mov.u32 %r1, %tid.x;
+
+  .loc 1 31 0
+  ld.global.f32 %f10, [%r3 + %tid.x];
+
+  .loc 1 40 0
+  mov.u32 %r12, %r1;
+
+  .loc 1 42 0
+  st.shared.f32 [%r12], %f1;
+
+  .loc 1 51 0
+  ld.shared.f32 %f2, [%r12];
+
+  .loc 1 60 0
+  setp.lt.s32 %p1, %tid.x, %r20;
+
+  .loc 1 61 0
+  @%p1 bra $L0;
+
+  .loc 1 62 0
+  bar.sync 0;
+
+$L0:
+  ret;
+}
